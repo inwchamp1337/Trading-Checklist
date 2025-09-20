@@ -354,45 +354,40 @@ def _format_value(v):
 
 
 def format_trade_message(row: dict) -> str:
-    """Return a nicely formatted Markdown message for a single symbol result."""
-    header = f"**{row.get('symbol','?')}**  \n"
-    header += f"Score: **{row.get('total',0)}** pts • *{row.get('percent', 0)}%*  \n\n"
-
-    plan = (
-        "**Trade Plan**\n"
-        f"• Entry: `{_format_value(row.get('entry'))}`  • Stop: `{_format_value(row.get('stop'))}`  \n"
-        f"• TP1: `{_format_value(row.get('tp1'))}`  • TP2: `{_format_value(row.get('tp2'))}`  \n\n"
-    )
-
-    rr = (
-        "**Risk / RRs**\n"
-        f"• Risk: `{_format_value(row.get('risk'))}`  • RR1: `{_format_value(row.get('rr1'))}`  • RR2: `{_format_value(row.get('rr2'))}`  \n\n"
-    )
-
-    # Passed checks list
-    passed = []
-    for key, _ in CHECK_ITEMS:
-        if row.get(key):
-            passed.append(key.replace("_", " ").title())
-    if passed:
-        checks = "**Passed Checks**\n" + "• " + "  • ".join(passed) + "\n"
-    else:
-        checks = "**Passed Checks**\n• None\n"
-
-    footer = f"\n*Time: {row.get('timestamp', '')}*"
-
-    return header + plan + rr + checks + footer
+    """Return a compact, readable message for a single symbol result."""
+    symbol = row.get('symbol', '?')
+    total_score = row.get('total', 0)
+    percent = row.get('percent', 0)
+    
+    # Header line
+    header = f"**{symbol}**\nTrade Plan Score: **{total_score}** pts • **{percent}%**"
+    
+    # Trade plan section
+    plan_lines = [
+        f"• Entry: {_format_value(row.get('entry'))}  • Stop: {_format_value(row.get('stop'))}",
+        f"• TP1: {_format_value(row.get('tp1'))}  • TP2: {_format_value(row.get('tp2'))}",
+        f"• Risk: {_format_value(row.get('risk'))}  • RR1: {_format_value(row.get('rr1'))}  • RR2: {_format_value(row.get('rr2'))}"
+    ]
+    
+    # Combine with separator
+    return header + "\n" + "\n".join(plan_lines) + "\n" + "-" * 43
 
 
 def format_top3_message(rows: list) -> str:
-    """Format a compact Top-3 summary for Discord."""
-    lines = ["**Top 3 candidates (no symbol met threshold)**\n"]
-    for r in rows:
-        lines.append(
-            f"**{r.get('symbol')}** — **{r.get('total',0)}** pts • *{r.get('percent',0)}%*  \n"
-            f"`Entry` `{_format_value(r.get('entry'))}` `TP1` `{_format_value(r.get('tp1'))}` `SL` `{_format_value(r.get('stop'))}`\n"
-        )
-    lines.append(f"\n*Generated: {now_iso()}*")
+    """Format a compact Top-3 summary."""
+    lines = ["**Top 3 Candidates (No Symbol Met Threshold)**\n"]
+    
+    for i, r in enumerate(rows, start=1):
+        symbol = r.get('symbol', '?')
+        total_score = r.get('total', 0)
+        percent = r.get('percent', 0)
+        
+        lines.append(f"**{i}. {symbol}**")
+        lines.append(f"Score: **{total_score}** pts • **{percent}%**")
+        lines.append(f"Entry: {_format_value(r.get('entry'))} • TP1: {_format_value(r.get('tp1'))} • Stop: {_format_value(r.get('stop'))}")
+        lines.append("-" * 30)
+    
+    lines.append(f"*Generated: {now_iso()}*")
     return "\n".join(lines)
 # --- end added helpers ---
 
