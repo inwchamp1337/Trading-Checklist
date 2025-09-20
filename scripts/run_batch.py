@@ -33,6 +33,7 @@ from trading_checklist.engine import prepare_df, evaluate_df
 from trading_checklist.scoring import detailed_result, evaluate_bar_series
 from scripts.ccxt_client import ExchangeClient
 from scripts.discord_notify import send_discord_message
+from trading_checklist.indicators import ema
 
 
 def synth_df(seed=0, n=200):
@@ -68,6 +69,61 @@ def ohlcv_to_df(ohlcv):
     df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
     return df[["open", "high", "low", "close", "volume"]]
+
+
+def analyze_btc_trends(ex_client, debug_mode=False):
+    """Analyze BTC/USDT trends across multiple timeframes and return formatted summary."""
+    symbol = "BTC/USDT"
+    timeframes = ["15m", "1h", "4h", "1d"]
+    trends = []
+    
+    for tf in timeframes:
+        try:
+            ohlcv = ex_client.fetch_ohlcv(symbol, timeframe=tf, limit=100)  # enough for EMA calc
+            if not ohlcv:
+                trends.append({"timeframe": tf, "trend": "N/A", "ema20": None, "ema50": None})
+                continue
+            df = ohlcv_to_df(ohlcv)
+            closes = df["close"].tolist()
+            if len(closes) < 50:
+                trends.append({"timeframe": tf, "trend": "N/A", "ema20": None, "ema50": None})
+                continue
+            
+            ema20_vals = ema(closes, 20)
+            ema50_vals = ema(closes, 50)
+            ema20 = ema20_vals[-1] if ema20_vals else None
+            ema50 = ema50_vals[-1] if ema50_vals else None
+            
+            if ema20 and ema50:
+                trend = "📈 Uptrend" if ema20 > ema50 else "📉 Downtrend"
+            else:
+                trend = "N/A"
+            
+            trends.append({"timeframe": tf, "trend": trend, "ema20": ema20, "ema50": ema50})
+        except Exception as e:
+            if debug_mode:
+                print(f"Error analyzing BTC {tf}: {e}")
+            trends.append({"timeframe": tf, "trend": "Error", "ema20": None, "ema50": None})
+    
+    # Format as Markdown table
+    summary = f"**BTC/USDT Trend Analysis ({pd.Timestamp.now().isoformat()})**\n\n"
+    summary += "| Timeframe | Trend | EMA20 | EMA50 |\n"
+    summary += "|-----------|-------|-------|-------|\n"
+    for t in trends:
+        ema20_str = f"{t['ema20']:.2f}" if t['ema20'] else "N/A"
+        ema50_str = f"{t['ema50']:.2f}" if t['ema50'] else "N/A"
+        summary += f"| {t['timeframe']} | {t['trend']} | {ema20_str} | {ema50_str} |\n"
+    
+    # Always send to Discord at end of cycle
+    try:
+        send_discord_message(summary)
+        if debug_mode:
+            print("Sent BTC trends to Discord.")
+    except Exception as exc:
+        if debug_mode:
+            print(f"Discord notify failed for BTC trends: {exc}")
+    
+    return summary
 
 
 def main():
@@ -142,6 +198,9 @@ def main():
             
             process_symbols(symbols_subset, ex_client, timeframe, limit_bars, rate_limit_sleep, 
                           debug_mode, min_score_percent, realtime_csv, output_path, csv_headers, write_csv, enable_top3, discord_notify)
+            
+            # Analyze BTC trends at end of each cycle
+            analyze_btc_trends(ex_client, debug_mode)
             
             if not loop_mode:
                 break
