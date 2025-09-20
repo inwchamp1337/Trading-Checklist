@@ -22,6 +22,16 @@ import sys
 import pandas as pd
 import numpy as np
 import ccxt
+from zoneinfo import ZoneInfo
+
+# timezone for all outputs
+TH_TZ = ZoneInfo("Asia/Bangkok")
+
+
+def now_iso():
+    """Return current time in Asia/Bangkok as ISO string (with offset)."""
+    return pd.Timestamp.now(tz=TH_TZ).isoformat()
+
 
 # Ensure repository root is on sys.path so local package `trading_checklist` is importable
 repo_root = Path(__file__).resolve().parents[1]
@@ -30,7 +40,7 @@ if str(repo_root) not in sys.path:
 
 from trading_checklist.utils import load_symbols, read_symbols
 from trading_checklist.engine import prepare_df, evaluate_df
-from trading_checklist.scoring import detailed_result, evaluate_bar_series
+from trading_checklist.scoring import detailed_result, evaluate_bar_series, CHECK_ITEMS
 from scripts.ccxt_client import ExchangeClient
 from scripts.discord_notify import send_discord_message
 from trading_checklist.indicators import ema
@@ -105,8 +115,8 @@ def analyze_btc_trends(ex_client, debug_mode=False):
                 print(f"Error analyzing BTC {tf}: {e}")
             trends.append({"timeframe": tf, "trend": "Error", "ema20": None, "ema50": None})
     
-    # Format as Markdown table
-    summary = f"**BTC/USDT Trend Analysis ({pd.Timestamp.now().isoformat()})**\n\n"
+    # Format as Markdown table (time in Asia/Bangkok)
+    summary = f"**BTC/USDT Trend Analysis ({now_iso()})**\n\n"
     summary += "| Timeframe | Trend | EMA20 | EMA50 |\n"
     summary += "|-----------|-------|-------|-------|\n"
     for t in trends:
@@ -194,7 +204,7 @@ def main():
         while True:
             loop_count += 1
             if loop_mode:
-                print(f"\n=== Loop {loop_count} started at {pd.Timestamp.now()} ===")
+                print(f"\n=== Loop {loop_count} started at {now_iso()} ===")
             
             process_symbols(symbols_subset, ex_client, timeframe, limit_bars, rate_limit_sleep, 
                           debug_mode, min_score_percent, realtime_csv, output_path, csv_headers, write_csv, enable_top3, discord_notify)
@@ -205,7 +215,7 @@ def main():
             if not loop_mode:
                 break
                 
-            print(f"\n=== Loop {loop_count} completed. Sleeping {loop_interval}s ===")
+            print(f"\n=== Loop {loop_count} completed at {now_iso()}. Sleeping {loop_interval}s ===")
             time.sleep(loop_interval)
             
     except KeyboardInterrupt:
@@ -235,7 +245,7 @@ def process_symbols(symbols_subset, ex_client, timeframe, limit_bars, rate_limit
             detail = detailed_result(signals, pdf["close"].tolist(), pdf["low"].tolist(), pdf["high"].tolist(), ema_period=20)
 
             percent = float(detail.get("percent", 0) or 0)
-            current_time = pd.Timestamp.now().isoformat()
+            current_time = now_iso()
             row = {"timestamp": current_time, "symbol": sym, **scores}
             row.update({
                 "percent": percent,
@@ -276,10 +286,7 @@ def process_symbols(symbols_subset, ex_client, timeframe, limit_bars, rate_limit
                                 return f"{float(x):.8f}"
                             except Exception:
                                 return str(x)
-                        msg = (
-                            f"[{current_time}] {sym} — {scores.get('total', 0)} pts, {percent}%\n"
-                            f"entry={fmt(row.get('entry'))} tp1={fmt(row.get('tp1'))} tp2={fmt(row.get('tp2'))} sl={fmt(row.get('stop'))}"
-                        )
+                        msg = format_trade_message(row)
                         send_discord_message(msg)
                     except Exception as exc:
                         if debug_mode:
@@ -305,15 +312,7 @@ def process_symbols(symbols_subset, ex_client, timeframe, limit_bars, rate_limit
         top3 = sorted(all_evaluated, key=lambda r: (r.get("percent") or 0), reverse=True)[:3]
         if discord_notify:
             try:
-                lines = []
-                for r in top3:
-                    def fmt(x):
-                        try:
-                            return f"{float(x):.8f}"
-                        except Exception:
-                            return str(x)
-                    lines.append(f"{r['symbol']} — {r.get('total', 0)} pts, {r.get('percent', 0)}% | entry={fmt(r.get('entry'))} tp1={fmt(r.get('tp1'))} sl={fmt(r.get('stop'))}")
-                summary = "No symbol met threshold. Top 3 candidates:\n" + "\n".join(lines)
+                summary = format_top3_message(top3)
                 send_discord_message(summary)
                 if debug_mode:
                     print("Sent top-3 summary to Discord.")
@@ -345,6 +344,57 @@ def process_symbols(symbols_subset, ex_client, timeframe, limit_bars, rate_limit
 
     return results
 
+
+# --- Added: Discord message formatting helpers ---
+def _format_value(v):
+    try:
+        return f"{float(v):.6f}"
+    except Exception:
+        return str(v) if v is not None else "N/A"
+
+
+def format_trade_message(row: dict) -> str:
+    """Return a nicely formatted Markdown message for a single symbol result."""
+    header = f"**{row.get('symbol','?')}**  \n"
+    header += f"Score: **{row.get('total',0)}** pts • *{row.get('percent', 0)}%*  \n\n"
+
+    plan = (
+        "**Trade Plan**\n"
+        f"• Entry: `{_format_value(row.get('entry'))}`  • Stop: `{_format_value(row.get('stop'))}`  \n"
+        f"• TP1: `{_format_value(row.get('tp1'))}`  • TP2: `{_format_value(row.get('tp2'))}`  \n\n"
+    )
+
+    rr = (
+        "**Risk / RRs**\n"
+        f"• Risk: `{_format_value(row.get('risk'))}`  • RR1: `{_format_value(row.get('rr1'))}`  • RR2: `{_format_value(row.get('rr2'))}`  \n\n"
+    )
+
+    # Passed checks list
+    passed = []
+    for key, _ in CHECK_ITEMS:
+        if row.get(key):
+            passed.append(key.replace("_", " ").title())
+    if passed:
+        checks = "**Passed Checks**\n" + "• " + "  • ".join(passed) + "\n"
+    else:
+        checks = "**Passed Checks**\n• None\n"
+
+    footer = f"\n*Time: {row.get('timestamp', '')}*"
+
+    return header + plan + rr + checks + footer
+
+
+def format_top3_message(rows: list) -> str:
+    """Format a compact Top-3 summary for Discord."""
+    lines = ["**Top 3 candidates (no symbol met threshold)**\n"]
+    for r in rows:
+        lines.append(
+            f"**{r.get('symbol')}** — **{r.get('total',0)}** pts • *{r.get('percent',0)}%*  \n"
+            f"`Entry` `{_format_value(r.get('entry'))}` `TP1` `{_format_value(r.get('tp1'))}` `SL` `{_format_value(r.get('stop'))}`\n"
+        )
+    lines.append(f"\n*Generated: {now_iso()}*")
+    return "\n".join(lines)
+# --- end added helpers ---
 
 if __name__ == "__main__":
     main()
