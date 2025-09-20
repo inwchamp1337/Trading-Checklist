@@ -26,3 +26,18 @@ Files
 - `trading_checklist/scoring.py`: checklist evaluation and scoring
 - `trading_checklist/utils.py`: helpers
 - `tests/`: pytest tests
+
+Discord notifier
+----------------
+You can send notifications to a Discord channel by setting `DISCORD_TOKEN`
+and `DISCORD_CHANNEL_ID` in your environment (or in a `.env` file at the repo root)
+and calling the helper in `scripts/discord_notify.py`:
+
+```python
+from scripts.discord_notify import send_discord_message
+
+send_discord_message("Hello from the trading checklist runner")
+```
+
+Install the dependency with `pip install -r requirements.txt` (the file now
+contains `discord.py`).

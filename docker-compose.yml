@@ -1,0 +1,15 @@
+services:
+  runner:
+    build: .
+    container_name: trading-checklist-runner
+    env_file:
+      - .env
+    # mount project so you can edit and keep logs/state external
+    volumes:
+      - ./:/app:rw
+    restart: unless-stopped
+    # override command by setting RUN_COMMAND env or via `docker-compose run`
+    environment:
+      PYTHONUNBUFFERED: "1"
+    # logs to console
+    tty: true

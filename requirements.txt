@@ -2,3 +2,9 @@ pytest
 pandas
 numpy
 ta
+discord.py
+
+# Additional dependencies used by the project
+ccxt
+python-dotenv
+aiohttp
