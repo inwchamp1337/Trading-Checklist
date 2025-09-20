@@ -42,7 +42,7 @@ from trading_checklist.utils import load_symbols, read_symbols
 from trading_checklist.engine import prepare_df, evaluate_df
 from trading_checklist.scoring import detailed_result, evaluate_bar_series, CHECK_ITEMS
 from scripts.ccxt_client import ExchangeClient
-from scripts.discord_notify import send_discord_message
+from scripts.discord_notify import send_discord_message, accumulate_message, send_bulk_discord_message
 from trading_checklist.indicators import ema
 
 
@@ -124,7 +124,7 @@ def analyze_btc_trends(ex_client, debug_mode=False):
         ema50_str = f"{t['ema50']:.2f}" if t['ema50'] else "N/A"
         summary += f"| {t['timeframe']} | {t['trend']} | {ema20_str} | {ema50_str} |\n"
     
-    # Always send to Discord at end of cycle
+    # Always send to Discord at end of cycle (immediate send for BTC analysis)
     try:
         send_discord_message(summary)
         if debug_mode:
@@ -227,8 +227,8 @@ def process_symbols(symbols_subset, ex_client, timeframe, limit_bars, rate_limit
     """Process symbols and optionally write to CSV in real-time.
     If no symbol meets min_score_percent, send top-3 results by percent to Discord.
     """
-    results = []              # passed the threshold -> will be written/sent per current behavior
-    all_evaluated = []        # all evaluated candidates with percent for fallback top3
+    results = []
+    all_evaluated = []
     total = len(symbols_subset)
     filtered_count = 0
 
@@ -259,15 +259,12 @@ def process_symbols(symbols_subset, ex_client, timeframe, limit_bars, rate_limit
                 "error": ""
             })
 
-            # record for fallback/top3 decision
             all_evaluated.append(row)
 
             if percent < min_score_percent:
                 if debug_mode:
                     print(f"⚠ {sym}: {percent}% (below {min_score_percent}% threshold)")
-                # continue evaluating next symbol (but keep row in all_evaluated)
             else:
-                # passed threshold: keep and optionally send/write immediately
                 filtered_count += 1
                 results.append(row)
                 if debug_mode:
@@ -279,18 +276,14 @@ def process_symbols(symbols_subset, ex_client, timeframe, limit_bars, rate_limit
                         writer.writerow(row)
                         f.flush()
 
+                # Accumulate message instead of sending immediately
                 if discord_notify:
                     try:
-                        def fmt(x):
-                            try:
-                                return f"{float(x):.8f}"
-                            except Exception:
-                                return str(x)
                         msg = format_trade_message(row)
-                        send_discord_message(msg)
+                        accumulate_message(msg)
                     except Exception as exc:
                         if debug_mode:
-                            print(f"Discord notify failed for {sym}: {exc}")
+                            print(f"Discord message accumulation failed for {sym}: {exc}")
 
         except Exception as e:
             error_msg = str(e)
@@ -298,7 +291,6 @@ def process_symbols(symbols_subset, ex_client, timeframe, limit_bars, rate_limit
                 print(f"❌ {sym}: {error_msg}")
             elif debug_mode:
                 print(f"❌ {sym}: {error_msg}")
-            # keep going
 
         if rate_limit_sleep > 0:
             time.sleep(rate_limit_sleep)
@@ -307,26 +299,34 @@ def process_symbols(symbols_subset, ex_client, timeframe, limit_bars, rate_limit
         status = "✅" if sym in [r["symbol"] for r in results] else "⚠"
         print(f"{status} {idx}/{total} ({pct}%) - {sym}")
 
-    # If nothing passed threshold, send top-3 by percent to Discord (and optionally append to CSV)
-    if filtered_count == 0 and all_evaluated and enable_top3:
-        top3 = sorted(all_evaluated, key=lambda r: (r.get("percent") or 0), reverse=True)[:3]
-        if discord_notify:
-            try:
+    # Send accumulated messages at the end
+    if discord_notify:
+        try:
+            # If we have results, send them
+            if filtered_count > 0:
+                send_bulk_discord_message()
+                if debug_mode:
+                    print(f"Sent {filtered_count} results to Discord in bulk.")
+            
+            # If no results and top3 enabled, send top3
+            elif enable_top3 and all_evaluated:
+                top3 = sorted(all_evaluated, key=lambda r: (r.get("percent") or 0), reverse=True)[:3]
                 summary = format_top3_message(top3)
                 send_discord_message(summary)
                 if debug_mode:
                     print("Sent top-3 summary to Discord.")
-            except Exception as exc:
-                if debug_mode:
-                    print(f"Discord notify failed for top-3: {exc}")
+        except Exception as exc:
+            if debug_mode:
+                print(f"Discord bulk send failed: {exc}")
 
-        # optionally write top3 to realtime CSV (only when CSV writes enabled)
-        if realtime_csv and write_csv:
-            with open(output_path, 'a', newline='', encoding='utf-8') as f:
-                writer = csv.DictWriter(f, fieldnames=csv_headers)
-                for r in top3:
-                    writer.writerow(r)
-                f.flush()
+    # Write top3 to CSV if needed
+    if filtered_count == 0 and all_evaluated and enable_top3 and realtime_csv and write_csv:
+        top3 = sorted(all_evaluated, key=lambda r: (r.get("percent") or 0), reverse=True)[:3]
+        with open(output_path, 'a', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=csv_headers)
+            for r in top3:
+                writer.writerow(r)
+            f.flush()
 
     # Write final results if not in real-time mode
     if write_csv and not realtime_csv and results:
