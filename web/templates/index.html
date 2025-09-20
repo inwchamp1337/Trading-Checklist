@@ -86,11 +86,32 @@
     </div>
 
     <script>
-        function createMessageCard(content) {
+        function createMessageCard(content, isoTimestamp, author) {
             const card = document.createElement('div');
             card.className = 'message-card';
+
+            const meta = document.createElement('div');
+            meta.style.display = 'flex';
+            meta.style.justifyContent = 'space-between';
+            meta.style.marginBottom = '8px';
+            meta.style.color = '#9aa7b2';
+            meta.style.fontSize = '13px';
+
+            const authorEl = document.createElement('div');
+            authorEl.textContent = author || '';
+            authorEl.style.fontWeight = '600';
+
+            const timeEl = document.createElement('div');
+            // Default to isoTimestamp if present, else empty
+            timeEl.textContent = isoTimestamp || '';
+
+            meta.appendChild(authorEl);
+            meta.appendChild(timeEl);
+
             const pre = document.createElement('pre');
             pre.textContent = content;
+
+            card.appendChild(meta);
             card.appendChild(pre);
             return card;
         }
@@ -113,15 +134,30 @@
                 let hasBtc = false;
 
                 messages.forEach(msg => {
+                    // Parse timestamp and localize to Asia/Bangkok for display
+                    let iso = msg.timestamp || null;
+                    let displayTime = '';
+                    try {
+                        if (iso) {
+                            const dt = new Date(iso);
+                            // Format to Asia/Bangkok using toLocaleString
+                            displayTime = dt.toLocaleString('en-GB', { timeZone: 'Asia/Bangkok', hour12: false });
+                        }
+                    } catch (e) {
+                        displayTime = iso || '';
+                    }
+
                     if (msg.content.includes('BTC/USDT Trend Analysis')) {
                         if (!hasBtc) btcContainer.innerHTML = ''; // Clear "no data" message
-                        const card = createMessageCard(msg.content);
+                        const card = createMessageCard(msg.content, displayTime, msg.author);
                         card.classList.add('btc');
-                        btcContainer.appendChild(card); // Always replace with the latest
+                        // Replace previous BTC analysis with the latest one
+                        btcContainer.innerHTML = '';
+                        btcContainer.appendChild(card);
                         hasBtc = true;
                     } else {
                         if (!hasSignals) signalsContainer.innerHTML = ''; // Clear "no data" message
-                        const card = createMessageCard(msg.content);
+                        const card = createMessageCard(msg.content, displayTime, msg.author);
                         signalsContainer.appendChild(card);
                         hasSignals = true;
                     }

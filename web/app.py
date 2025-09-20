@@ -42,10 +42,11 @@ async def fetch_discord_messages(token: str, channel_id: int) -> list:
 
         # Fetch last 100 messages since the start of today
         async for msg in channel.history(limit=100, after=start_of_day):
+            # created_at is timezone-naive in UTC -> treat as UTC then convert
             created_utc = msg.created_at.replace(tzinfo=ZoneInfo("UTC"))
-            created_th = created_utc.astimezone(th_tz)
+            # Keep ISO format in UTC for the API; client will localize to Asia/Bangkok
             messages_data.append({
-                "timestamp": created_th.strftime('%Y-%m-%d %H:%M:%S %Z'),
+                "timestamp": created_utc.isoformat(),
                 "author": msg.author.display_name,
                 "content": msg.content
             })
