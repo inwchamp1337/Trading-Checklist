@@ -9,6 +9,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     gcc \
+    dos2unix \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy only requirements first for better caching
@@ -21,7 +22,7 @@ RUN pip install -r requirements.txt
 COPY . .
 
 # make entrypoint executable
-RUN chmod +x ./scripts/entrypoint.sh
-
+RUN chmod +x ./scripts/entrypoint.sh && dos2unix ./scripts/entrypoint.sh
+EXPOSE 5000
 # default command: run the entrypoint which launches run_batch.py
 ENTRYPOINT [ "/app/scripts/entrypoint.sh" ]
