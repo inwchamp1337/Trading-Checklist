@@ -3,6 +3,29 @@ from . import indicators
 from typing import Any
 
 
+def calculate_rsi(prices: List[float], period: int = 14) -> List[float]:
+    """Calculate RSI indicator for momentum analysis."""
+    if len(prices) < period + 1:
+        return []
+    
+    deltas = [prices[i] - prices[i-1] for i in range(1, len(prices))]
+    gains = [d if d > 0 else 0 for d in deltas]
+    losses = [-d if d < 0 else 0 for d in deltas]
+    
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+    
+    rsi_values = []
+    for i in range(period, len(deltas)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+        rs = avg_gain / avg_loss if avg_loss != 0 else 0
+        rsi = 100 - (100 / (1 + rs))
+        rsi_values.append(rsi)
+    
+    return rsi_values
+
+
 CHECK_ITEMS = [
     ("previous_resistance", 10),
     ("breakout_candle", 8),
@@ -99,54 +122,93 @@ def evaluate_bar_series(highs: List[float], lows: List[float], opens: List[float
     Returns a dict of boolean signals matching CHECK_ITEMS keys.
     
     Rules:
-    - previous_resistance: last close > max high of previous 20 bars
-    - breakout_candle: close > open and close at least 50% of range above open
-    - volume: last volume > mean previous 20
+    - previous_resistance: last close > max high of previous 20 bars with volume confirmation
+    - breakout_candle: strong bullish candle with long body and high volume
+    - volume: last volume > 1.5x mean previous 20 (stronger threshold)
     - ema20_touch: previous candle close was near previous EMA20 value (within 1%) and current close > previous close
-    - fib_pullback: previous close retraced to 38.2-61.8% of prior swing
-    - adx: ADX > 25 (trending market)
-    - multi_tf: current trend aligns with larger timeframes (simplified)
-    - close_above_ema20: current close is above current EMA20
-    - pattern: detects simple bullish pattern
-    - risk_reward: calculated risk reward ratio meets minimum threshold (1.5)
+    - fib_pullback: previous close retraced to 38.2-61.8% of prior swing with bullish reversal
+    - adx: ADX > 25 (trending market) with DI+ > DI- for bullish confirmation
+    - multi_tf: current trend aligns with larger timeframes (EMA alignment across periods)
+    - close_above_ema20: current close is above current EMA20 with momentum
+    - pattern: detects bullish reversal patterns (hammer, doji, engulfing)
+    - risk_reward: calculated risk reward ratio meets minimum threshold (2.0) with proper stop placement
     """
     n = len(closes)
     signals = {}
     
     # Early return if not enough data
-    if n < ema_period + 5:
+    if n < ema_period + 10:  # Increased minimum data requirement
         return {k: False for k, _ in CHECK_ITEMS}
 
     # Calculate EMA values only once
     ema_vals = indicators.ema(closes, ema_period) if n >= ema_period else []
+    ema_50_vals = indicators.ema(closes, 50) if n >= 50 else []
     
-    # previous resistance: last close > max high of previous 20 bars
-    # Safety check: ensure we have enough data
+    # Calculate RSI for momentum confirmation
+    rsi_vals = calculate_rsi(closes, 14) if n >= 20 else []
+    current_rsi = rsi_vals[-1] if rsi_vals else None
+    
+    # previous resistance: last close > max high of previous 20 bars WITH volume confirmation
+    # Enhanced: requires volume spike and strong close
     if n > ema_period + 1:
         prev_highs = highs[-(ema_period+1):-1]
-        signals["previous_resistance"] = closes[-1] > max(prev_highs) if prev_highs else False
+        prev_volumes = volumes[-(ema_period+1):-1]
+        resistance_level = max(prev_highs) if prev_highs else 0
+        avg_volume = sum(prev_volumes) / len(prev_volumes) if prev_volumes else 0
+        
+        breakout_strength = (closes[-1] - resistance_level) / resistance_level if resistance_level > 0 else 0
+        volume_confirmation = volumes[-1] > 1.5 * avg_volume if avg_volume > 0 else False
+        
+        signals["previous_resistance"] = (closes[-1] > resistance_level) and volume_confirmation and (breakout_strength > 0.005)  # 0.5% above resistance
     else:
         signals["previous_resistance"] = False
 
-    # breakout candle: close > open and close at least 50% of range above open
+    # breakout candle: Enhanced - strong bullish candle with momentum
+    # Check for strong body, good close position, and volume confirmation
     last_range = highs[-1] - lows[-1] if n > 0 else 0
-    signals["breakout_candle"] = (closes[-1] > opens[-1]) and ((closes[-1] - opens[-1]) >= 0.5 * last_range if last_range > 0 else False) if n > 0 else False
+    body_size = abs(closes[-1] - opens[-1]) if n > 0 else 0
+    upper_wick = highs[-1] - max(closes[-1], opens[-1]) if n > 0 else 0
+    lower_wick = min(closes[-1], opens[-1]) - lows[-1] if n > 0 else 0
+    
+    # Strong bullish candle: body > 60% of range, close > open, small upper wick
+    strong_body = (body_size / last_range) > 0.6 if last_range > 0 else False
+    bullish_close = closes[-1] > opens[-1] if n > 0 else False
+    good_close_position = (closes[-1] - lows[-1]) / last_range > 0.8 if last_range > 0 else False
+    small_upper_wick = (upper_wick / last_range) < 0.2 if last_range > 0 else True
+    
+    signals["breakout_candle"] = strong_body and bullish_close and good_close_position and small_upper_wick
 
-    # volume: last volume > mean previous 20
-    # Safety check for adequate volume data
+    # volume: Enhanced - stronger threshold and trend analysis
+    # Requires volume 1.5x above average AND increasing volume trend
     if n > ema_period + 1:
         prev_vol = volumes[-(ema_period+1):-1]
-        signals["volume"] = volumes[-1] > (sum(prev_vol) / len(prev_vol)) if prev_vol else False
+        avg_volume = sum(prev_vol) / len(prev_vol) if prev_vol else 0
+        
+        # Check volume trend (last 3 vs previous 3)
+        recent_vol = sum(volumes[-3:]) / 3 if n >= 3 else volumes[-1]
+        earlier_vol = sum(volumes[-6:-3]) / 3 if n >= 6 else avg_volume
+        volume_trending_up = recent_vol > earlier_vol
+        
+        signals["volume"] = (volumes[-1] > 1.5 * avg_volume) and volume_trending_up if avg_volume > 0 else False
     else:
         signals["volume"] = False
 
-    # ema20_touch: price touched EMA20 on pullback then bounced
+    # ema20_touch: Enhanced - price touched EMA20 on pullback with momentum confirmation
     # Fixed: compare previous close with previous EMA value (ema_vals[-2])
-    if len(ema_vals) >= 2 and n >= 2:
+    if len(ema_vals) >= 2 and n >= 3:
         prev_ema = ema_vals[-2]  # Previous bar's EMA
         prev_close = closes[-2]  # Previous bar's close
-        touched = abs(prev_close - prev_ema) / prev_ema < 0.01 if prev_ema > 0 else False  # within 1%
-        signals["ema20_touch"] = touched and (closes[-1] > prev_close)
+        current_close = closes[-1]
+        prev_prev_close = closes[-3]  # For momentum check
+        
+        # Touch condition: within 1% of EMA
+        touched = abs(prev_close - prev_ema) / prev_ema < 0.01 if prev_ema > 0 else False
+        
+        # Momentum confirmation: current close > previous close AND recovering from pullback
+        momentum_up = current_close > prev_close
+        recovery_strength = (current_close - prev_close) / prev_close if prev_close > 0 else 0
+        
+        signals["ema20_touch"] = touched and momentum_up and (recovery_strength > 0.002)  # 0.2% recovery minimum
     else:
         signals["ema20_touch"] = False
 
@@ -171,36 +233,106 @@ def evaluate_bar_series(highs: List[float], lows: List[float], opens: List[float
     else:
         signals["adx"] = False
 
-    # multi timeframe - placeholder: we assume True if current close > previous close
-    signals["multi_tf"] = closes[-1] > closes[-2] if n >= 2 else False
+    # multi timeframe: Enhanced - EMA alignment across different periods
+    # Check alignment of EMA20, EMA50, and price momentum
+    if len(ema_vals) > 0 and len(ema_50_vals) > 0 and n >= 3:
+        current_price = closes[-1]
+        ema20_current = ema_vals[-1]
+        ema50_current = ema_50_vals[-1]
+        
+        # Price above both EMAs
+        price_above_emas = current_price > ema20_current and current_price > ema50_current
+        
+        # EMA20 above EMA50 (uptrend structure)
+        ema_alignment = ema20_current > ema50_current
+        
+        # Short-term momentum (last 3 bars trending up)
+        short_momentum = all(closes[i] >= closes[i-1] for i in range(-2, 0)) if n >= 3 else False
+        
+        signals["multi_tf"] = price_above_emas and ema_alignment and short_momentum
+    else:
+        signals["multi_tf"] = closes[-1] > closes[-2] if n >= 2 else False
 
-    # close_above_ema20: current close is above current EMA20
-    # Clarified: explicitly comparing current close with current EMA
-    signals["close_above_ema20"] = closes[-1] > ema_vals[-1] if len(ema_vals) > 0 else False
+    # close_above_ema20: Enhanced - current close is above current EMA20 with momentum
+    # Clarified: explicitly comparing current close with current EMA with distance check
+    if len(ema_vals) > 0:
+        ema20_current = ema_vals[-1]
+        distance_above = (closes[-1] - ema20_current) / ema20_current if ema20_current > 0 else 0
+        
+        # RSI momentum confirmation (not overbought)
+        rsi_confirmation = (current_rsi < 70) if current_rsi else True  # Not overbought
+        
+        # Must be above EMA20 by at least 0.1% to avoid noise
+        signals["close_above_ema20"] = closes[-1] > ema20_current and distance_above > 0.001 and rsi_confirmation
+    else:
+        signals["close_above_ema20"] = False
 
-    # pattern detection: check for simple bull flag-like pattern
-    if n >= 2:
-        body_last = abs(closes[-1] - opens[-1])
-        body_prev = abs(closes[-2] - opens[-2])
-        signals["pattern"] = (body_prev > 1.5 * body_last) and (closes[-1] > closes[-2])
+    # pattern detection: Enhanced - detects multiple bullish reversal patterns
+    if n >= 3:
+        # Current and previous candle data
+        curr_body = abs(closes[-1] - opens[-1])
+        curr_range = highs[-1] - lows[-1]
+        prev_body = abs(closes[-2] - opens[-2])
+        prev_range = highs[-2] - lows[-2]
+        prev2_body = abs(closes[-3] - opens[-3])
+        
+        # Hammer pattern: small body, long lower wick, minimal upper wick
+        lower_wick = min(closes[-1], opens[-1]) - lows[-1]
+        upper_wick = highs[-1] - max(closes[-1], opens[-1])
+        hammer = (curr_body / curr_range < 0.3) and (lower_wick > 2 * curr_body) and (upper_wick < curr_body) and (closes[-1] > opens[-1]) if curr_range > 0 else False
+        
+        # Bullish engulfing: current candle body engulfs previous
+        engulfing = (closes[-1] > opens[-1]) and (closes[-2] < opens[-2]) and (closes[-1] > opens[-2]) and (opens[-1] < closes[-2]) if n >= 2 else False
+        
+        # Morning star pattern: three candle reversal
+        morning_star = False
+        if n >= 3:
+            # First: bearish, Second: small body/doji, Third: bullish
+            first_bearish = closes[-3] < opens[-3]
+            second_small = prev_body < (prev2_body * 0.5)
+            third_bullish = closes[-1] > opens[-1]
+            gap_down = opens[-2] < closes[-3]
+            gap_up = opens[-1] > closes[-2]
+            morning_star = first_bearish and second_small and third_bullish and gap_down and gap_up
+        
+        signals["pattern"] = hammer or engulfing or morning_star
     else:
         signals["pattern"] = False
 
-    # risk reward: Calculate actual risk/reward instead of always True
-    # Use values from current bar to determine if RR is acceptable
-    if n >= 3:
+    # risk reward: Enhanced - Calculate actual risk/reward with proper stop placement
+    # Use ATR-based stops and multiple target levels
+    if n >= 5:
         entry = closes[-1]
-        recent_low = min(lows[-3:])
-        # Simple buffer calculation
-        buffer = 0.005 * entry  # 0.5% buffer
-        stop = recent_low - buffer
+        
+        # Calculate ATR for dynamic stop placement
+        atr_vals = indicators.average_true_range(highs[-14:], lows[-14:], closes[-14:], period=14) if n >= 14 else []
+        atr = atr_vals[-1] if atr_vals else None
+        
+        # Support level: recent swing low
+        recent_low = min(lows[-5:])
+        
+        # Stop calculation: below support with ATR buffer
+        if atr:
+            atr_buffer = atr * 1.5  # 1.5x ATR buffer
+            stop = min(recent_low - atr_buffer, entry * 0.98)  # Max 2% stop
+        else:
+            stop = min(recent_low * 0.995, entry * 0.98)  # 0.5% below support or 2% max
+        
         risk = entry - stop
         
-        # Target calculation
-        tp1 = entry + (1.5 * risk)
+        # Target calculation: 2:1 minimum risk/reward
+        tp1 = entry + (2.0 * risk)  # 2:1 RR
         
-        # Check if risk is reasonable and RR meets minimum threshold
-        signals["risk_reward"] = risk > 0 and risk < 0.1 * entry and (tp1 - entry) / risk >= 1.5
+        # Risk management checks
+        risk_percentage = risk / entry if entry > 0 else 1
+        risk_reasonable = 0.005 < risk_percentage < 0.03  # 0.5% to 3% risk
+        rr_ratio = (tp1 - entry) / risk if risk > 0 else 0
+        
+        # Additional confirmation: ensure stop is below recent structure
+        structure_support = min(lows[-3:])  # Last 3 lows
+        stop_below_structure = stop < structure_support
+        
+        signals["risk_reward"] = risk_reasonable and rr_ratio >= 2.0 and stop_below_structure
     else:
         signals["risk_reward"] = False
 
