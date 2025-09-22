@@ -22,6 +22,7 @@ import sys
 import pandas as pd
 import numpy as np
 import ccxt
+import requests
 from zoneinfo import ZoneInfo
 
 # timezone for all outputs
@@ -340,11 +341,36 @@ def calculate_macd(prices, fast=12, slow=26, signal=9):
     return macd_line, signal_line, hist
 
 
+def fetch_binance_symbols_once() -> list:
+    """Fetch futures exchange symbols from Binance fapi exchangeInfo once.
+    Returns symbols in form 'TOKEN/USDT:USDT'. On error returns empty list.
+    """
+    url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+    try:
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        out = set()
+        for s in data.get("symbols", []):
+            sym = s.get("symbol", "")
+            # only consider USDT-quoted perpetual/symbols
+            if sym.endswith("USDT"):
+                base = sym[:-4]
+                if base:
+                    out.add(f"{base}/USDT:USDT")
+        symbols = sorted(out)
+        print(f"Fetched {len(symbols)} symbols from Binance fapi")
+        return symbols
+    except Exception as exc:
+        print(f"Failed to fetch remote symbols from Binance: {exc}")
+        return []
+
+
 def main():
     repo_root = Path(__file__).resolve().parents[1]
     symbols_path = repo_root / "symbols.txt"
-    
-    # Environment configuration
+
+    # Environment configuration (ensure these are available before using symbols)
     run_limit = int(os.environ.get("RUN_LIMIT", "20"))
     timeframe = os.environ.get("TIMEFRAME", "1h")
     limit_bars = int(os.environ.get("LIMIT_BARS", "300"))
@@ -355,36 +381,36 @@ def main():
     debug_mode = os.environ.get("DEBUG", "false").lower() == "true"
     min_score_percent = float(os.environ.get("MIN_SCORE_PERCENT", "75.0"))
     loop_mode = os.environ.get("LOOP_MODE", "false").lower() == "true"
-    loop_interval = int(os.environ.get("LOOP_INTERVAL", "300"))  # seconds between loops
+    loop_interval = int(os.environ.get("LOOP_INTERVAL", "300"))
     realtime_csv = os.environ.get("REALTIME_CSV", "false").lower() == "true"
-    # New env toggles
     write_csv = os.environ.get("WRITE_CSV", "true").lower() == "true"
     enable_top3 = os.environ.get("ENABLE_TOP3", "true").lower() == "true"
-    # Discord config from .env
     discord_notify = os.environ.get("DISCORD_NOTIFY", "false").lower() == "true"
-    
-    print(f"Configuration:")
-    print(f"  Run limit: {run_limit}")
-    print(f"  Timeframe: {timeframe}")
-    print(f"  Bars limit: {limit_bars}")
-    print(f"  Rate limit sleep: {rate_limit_sleep}s")
-    print(f"  Output file: {output_file}")
-    print(f"  Start index: {start_index}")
-    print(f"  Use futures: {use_futures}")
-    print(f"  Debug mode: {debug_mode}")
-    print(f"  Min score percent: {min_score_percent}%")
-    print(f"  Loop mode: {loop_mode}")
-    if loop_mode:
-        print(f"  Loop interval: {loop_interval}s")
-    print(f"  Real-time CSV: {realtime_csv}")
-    print()
-    
-    # use the new read_symbols which returns 'TOKEN/USDT' normalized
-    symbols = read_symbols(symbols_path)
-    
-    # Apply start index and limit
+
+    if debug_mode:
+        print("Environment:")
+        print(f"  RUN_LIMIT={run_limit}, TIMEFRAME={timeframe}, LIMIT_BARS={limit_bars}")
+        print(f"  START_INDEX={start_index}, USE_FUTURES={use_futures}, DEBUG={debug_mode}")
+        print(f"  WRITE_CSV={write_csv}, REALTIME_CSV={realtime_csv}, DISCORD_NOTIFY={discord_notify}")
+
+    # try remote fetch first (one-time)
+    symbols = fetch_binance_symbols_once()
+    if not symbols:
+        # fallback to local file (read_symbols returns 'TOKEN/USDT')
+        if symbols_path.exists():
+            symbols = read_symbols(symbols_path)
+            print(f"Loaded {len(symbols)} symbols from {symbols_path}")
+        else:
+            print("No symbols available (remote fetch failed and symbols.txt missing). Exiting.")
+            return
+
+    # Apply start index and limit to the fetched symbols
     symbols_subset = symbols[start_index:start_index + run_limit] if run_limit > 0 else symbols[start_index:]
-    
+    # Debug: print summary of subset
+    if debug_mode:
+        end_idx = start_index + (run_limit if run_limit > 0 else len(symbols))
+        print(f"Processing symbols {start_index}..{end_idx} (total fetched: {len(symbols)})")
+
     # exchange client wrapper (tries futures then spot)
     ex_client = ExchangeClient(rate_limit=True)
     if not use_futures:
