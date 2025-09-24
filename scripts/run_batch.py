@@ -461,6 +461,7 @@ def process_symbols(symbols_subset, ex_client, timeframe, limit_bars, rate_limit
     all_evaluated = []
     total = len(symbols_subset)
     filtered_count = 0
+    passing_symbols = []  # เก็บสัญลักษณ์ที่ผ่านเกณฑ์
 
     for idx, sym in enumerate(symbols_subset, start=1):
         try:
@@ -497,6 +498,7 @@ def process_symbols(symbols_subset, ex_client, timeframe, limit_bars, rate_limit
             else:
                 filtered_count += 1
                 results.append(row)
+                passing_symbols.append(row)  # เพิ่มไปยัง passing_symbols
                 if debug_mode:
                     print(f"✅ {sym}: total={scores.get('total', 0)}, percent={percent}%")
 
@@ -506,14 +508,14 @@ def process_symbols(symbols_subset, ex_client, timeframe, limit_bars, rate_limit
                         writer.writerow(row)
                         f.flush()
 
-                # Accumulate message instead of sending immediately
-                if discord_notify:
-                    try:
-                        msg = format_trade_message(row)
-                        accumulate_message(msg)
-                    except Exception as exc:
-                        if debug_mode:
-                            print(f"Discord message accumulation failed for {sym}: {exc}")
+                # ไม่ต้องสะสมข้อความทันทีแล้ว เพราะเราจะจัดการการส่งด้วยวิธีอื่น
+                # if discord_notify:
+                #     try:
+                #         msg = format_trade_message(row)
+                #         accumulate_message(msg)
+                #     except Exception as exc:
+                #         if debug_mode:
+                #             print(f"Discord message accumulation failed for {sym}: {exc}")
 
         except Exception as e:
             error_msg = str(e)
@@ -529,16 +531,26 @@ def process_symbols(symbols_subset, ex_client, timeframe, limit_bars, rate_limit
         status = "✅" if sym in [r["symbol"] for r in results] else "⚠"
         print(f"{status} {idx}/{total} ({pct}%) - {sym}")
 
-    # Send accumulated messages at the end
+    # จัดการการส่งข้อความ Discord ที่นี่ด้วยวิธีการใหม่
     if discord_notify:
         try:
-            # If we have results, send them
+            # ถ้ามีเหรียญที่ผ่านเกณฑ์
             if filtered_count > 0:
-                send_bulk_discord_message()
+                # ส่งทีละเหรียญ แทนที่จะรวมกันส่งครั้งเดียว
+                for row in passing_symbols:
+                    try:
+                        msg = format_trade_message(row)
+                        send_discord_message(msg)
+                        # รอสักเล็กน้อยเพื่อไม่ให้ส่งข้อความเร็วเกินไป
+                        time.sleep(0.5)
+                    except Exception as exc:
+                        if debug_mode:
+                            print(f"Failed to send Discord message for {row.get('symbol')}: {exc}")
+                
                 if debug_mode:
-                    print(f"Sent {filtered_count} results to Discord in bulk.")
+                    print(f"Sent {filtered_count} individual results to Discord.")
             
-            # If no results and top3 enabled, send top3
+            # ถ้าไม่มีเหรียญที่ผ่านเกณฑ์และต้องการส่ง top3
             elif enable_top3 and all_evaluated:
                 top3 = sorted(all_evaluated, key=lambda r: (r.get("percent") or 0), reverse=True)[:3]
                 summary = format_top3_message(top3)
@@ -547,7 +559,7 @@ def process_symbols(symbols_subset, ex_client, timeframe, limit_bars, rate_limit
                     print("Sent top-3 summary to Discord.")
         except Exception as exc:
             if debug_mode:
-                print(f"Discord bulk send failed: {exc}")
+                print(f"Discord send failed: {exc}")
 
     # Write top3 to CSV if needed
     if filtered_count == 0 and all_evaluated and enable_top3 and realtime_csv and write_csv:
