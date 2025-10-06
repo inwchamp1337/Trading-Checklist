@@ -5,6 +5,7 @@ Simple Python package implementing the checklist described by the user.
 
 Install
 -------
+<img width="1421" height="907" alt="image" src="https://github.com/user-attachments/assets/e6d3e437-0592-4919-9108-04508133bb77" />
 
 Create a virtualenv and install pytest:
 
