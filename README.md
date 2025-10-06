@@ -3,6 +3,37 @@ Trading Checklist
 
 Simple Python package implementing the checklist described by the user.
 
+      +-------------------------+
+      |  Fetch USDT pairs       |
+      |  from Binance API       |
+      +-----------+-------------+
+                  |
+                  v
+      +-------------------------+
+      |  Analyze each pair      |
+      |  Calculate breakhigh    |
+      |  score using CHECK_ITEMS|
+      +-----------+-------------+
+                  |
+                  v
+      +-------------------------+
+      |  Filter results         |
+      |  - Score >= threshold   |
+      |  - Top 3 if below      |
+      +-----------+-------------+
+                  |
+                  v
+      +-------------------------+
+      |  Log results            |
+      +-----------+-------------+
+                  |
+                  v
+      +-------------------------+
+      |  Send asynchronously    |
+      |  to Discord             |
+      +-------------------------+
+
+
 Install
 -------
 <img width="1421" height="907" alt="image" src="https://github.com/user-attachments/assets/e6d3e437-0592-4919-9108-04508133bb77" />
